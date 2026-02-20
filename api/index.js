@@ -32,8 +32,20 @@ app.get('/', (req, res) => {
   });
 });
 
+// Handle /api route (without trailing path)
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: 'Travel Window Backend API',
+    status: 'running',
+    endpoints: {
+      test: '/api/test',
+      health: '/api/health'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Simple test route
-// Vercel auto-detects /api/index.js and routes /api/* to this function
 app.get('/test', (req, res) => {
   res.json({ message: 'Backend working', timestamp: new Date().toISOString() });
 });
@@ -53,6 +65,16 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Catch-all route for debugging
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.path,
+    method: req.method,
     timestamp: new Date().toISOString()
   });
 });
