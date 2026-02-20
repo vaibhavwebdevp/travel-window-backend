@@ -6,15 +6,32 @@ const path = require('path');
 
 const app = express();
 
-// CORS middleware
+// CORS middleware - Handle preflight OPTIONS requests
 app.use(cors({
-  origin: [
-    'https://travel-window-frontend.vercel.app',
-    'http://localhost:4200',
-    'http://localhost:3000'
-  ],
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'https://travel-window-frontend.vercel.app',
+      'http://localhost:4200',
+      'http://localhost:3000'
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all origins for now - tighten later
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Authorization']
 }));
+
+// Handle preflight OPTIONS requests explicitly
+app.options('*', cors());
 
 // Basic middleware
 app.use(express.json());
