@@ -151,7 +151,7 @@ app.use('/suppliers', ensureDB, require(path.join(__dirname, '../routes/supplier
 app.use('/reports', ensureDB, require(path.join(__dirname, '../routes/reports')));
 app.use('/dashboard', ensureDB, require(path.join(__dirname, '../routes/dashboard')));
 app.use('/payments', ensureDB, require(path.join(__dirname, '../routes/payments')));
-app.use('/seed', ensureDB, require(path.join(__dirname, '../routes/seed')));
+app.use('/', ensureDB, require(path.join(__dirname, '../routes/seed')));
 
 // Catch-all route for debugging
 app.use((req, res) => {
