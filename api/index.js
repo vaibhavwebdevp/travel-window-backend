@@ -1,5 +1,6 @@
 // Vercel serverless function wrapper for Express app
 const express = require('express');
+const serverless = require('serverless-http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -89,7 +90,7 @@ const connectDB = async () => {
   return cached.conn;
 };
 
-// Root route (for /api)
+// Root route (for /api and /)
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Travel Window Backend API',
@@ -102,8 +103,20 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: 'Travel Window Backend API',
+    status: 'running',
+    endpoints: {
+      test: '/api/test',
+      health: '/api/health',
+      auth: '/api/auth/login'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
 
-// Test route (without DB) - for debugging
+// Test route (without DB) - handle both /test and /api/test
 app.get('/test', (req, res) => {
   res.json({ 
     message: 'Backend working', 
@@ -112,9 +125,27 @@ app.get('/test', (req, res) => {
     timestamp: new Date().toISOString() 
   });
 });
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    message: 'Backend working', 
+    path: req.path,
+    originalUrl: req.originalUrl,
+    timestamp: new Date().toISOString() 
+  });
+});
 
-// Health check (without DB dependency)
+// Health check (without DB dependency) - handle both /health and /api/health
 app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    connected: !!cached.conn,
+    readyState: mongoose.connection.readyState,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    timestamp: new Date().toISOString()
+  });
+});
+app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
     connected: !!cached.conn,
@@ -163,5 +194,5 @@ app.use((req, res) => {
   });
 });
 
-// Export Express app directly - Vercel handles serverless wrapping automatically
-module.exports = app;
+// Export wrapped handler - required when using explicit routes in vercel.json
+module.exports = serverless(app);
