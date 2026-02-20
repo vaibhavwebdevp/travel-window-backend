@@ -180,15 +180,15 @@ const ensureDB = async (req, res, next) => {
   }
 };
 
-// Routes - use relative paths so Vercel can trace dependencies
-app.use('/auth', ensureDB, require('../routes/auth'));
-app.use('/users', ensureDB, require('../routes/users'));
-app.use('/bookings', ensureDB, require('../routes/bookings'));
-app.use('/suppliers', ensureDB, require('../routes/suppliers'));
-app.use('/reports', ensureDB, require('../routes/reports'));
-app.use('/dashboard', ensureDB, require('../routes/dashboard'));
-app.use('/payments', ensureDB, require('../routes/payments'));
-app.use('/seed', ensureDB, require('../routes/seed'));
+// Routes - mount under /api so frontend requests to /api/auth/login etc. match
+app.use('/api/auth', ensureDB, require('../routes/auth'));
+app.use('/api/users', ensureDB, require('../routes/users'));
+app.use('/api/bookings', ensureDB, require('../routes/bookings'));
+app.use('/api/suppliers', ensureDB, require('../routes/suppliers'));
+app.use('/api/reports', ensureDB, require('../routes/reports'));
+app.use('/api/dashboard', ensureDB, require('../routes/dashboard'));
+app.use('/api/payments', ensureDB, require('../routes/payments'));
+app.use('/api/seed', ensureDB, require('../routes/seed'));
 
 // Catch-all route for debugging
 app.use((req, res) => {
