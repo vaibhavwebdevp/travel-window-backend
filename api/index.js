@@ -19,7 +19,11 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Root route
+// Vercel auto-detects api/index.js and routes /api/* to it
+// But Express receives paths WITHOUT /api prefix
+// So /api/test becomes /test in Express
+
+// Root route (for /api)
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Travel Window Backend API',
@@ -32,39 +36,22 @@ app.get('/', (req, res) => {
   });
 });
 
-// Handle /api route (without trailing path)
-app.get('/api', (req, res) => {
+// Test route (handles /api/test)
+app.get('/test', (req, res) => {
   res.json({ 
-    message: 'Travel Window Backend API',
-    status: 'running',
-    endpoints: {
-      test: '/api/test',
-      health: '/api/health'
-    },
-    timestamp: new Date().toISOString()
+    message: 'Backend working', 
+    path: req.path,
+    originalUrl: req.originalUrl,
+    timestamp: new Date().toISOString() 
   });
 });
 
-// Simple test route
-app.get('/test', (req, res) => {
-  res.json({ message: 'Backend working', timestamp: new Date().toISOString() });
-});
-
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'Backend working (with /api prefix)', timestamp: new Date().toISOString() });
-});
-
-// Health check
+// Health check (handles /api/health)
 app.get('/health', (req, res) => {
   res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+    status: 'ok',
+    path: req.path,
+    originalUrl: req.originalUrl,
     timestamp: new Date().toISOString()
   });
 });
@@ -74,6 +61,7 @@ app.use((req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
     path: req.path,
+    originalUrl: req.originalUrl,
     method: req.method,
     timestamp: new Date().toISOString()
   });
