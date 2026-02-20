@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  photo: {
+    type: String,
+    default: ''
+  },
   isActive: {
     type: Boolean,
     default: true

@@ -151,9 +151,11 @@ router.get('/', auth, async (req, res) => {
     
     const query = {};
     
-    // Role-based visibility: Agent only their bookings, Account only non-Draft, Admin all
-    if (req.user.role === 'AGENT1' || req.user.role === 'AGENT2') {
+    // Role-based visibility: Agent1 only their bookings; Agent2 sees all submitted (to edit commercial); Account non-Draft; Admin all
+    if (req.user.role === 'AGENT1') {
       query.submittedBy = req.user._id;
+    } else if (req.user.role === 'AGENT2') {
+      query.status = { $ne: 'Draft' };
     } else if (req.user.role === 'ACCOUNT') {
       query.status = { $ne: 'Draft' };
     }
@@ -214,7 +216,7 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// Get booking by ID (role-based: Agent only own, Account no Draft, Admin all)
+// Get booking by ID — any agent can view (e.g. after search by PNR); Account no Draft; Admin all
 router.get('/:id', auth, async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id)
@@ -228,16 +230,12 @@ router.get('/:id', auth, async (req, res) => {
       return res.status(404).json({ message: 'Booking not found' });
     }
     
-    if (req.user.role === 'AGENT1' || req.user.role === 'AGENT2') {
-      const submittedById = booking.submittedBy && (booking.submittedBy._id || booking.submittedBy);
-      if (submittedById && submittedById.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ message: 'You can only view your own bookings' });
-      }
-    } else if (req.user.role === 'ACCOUNT') {
+    if (req.user.role === 'ACCOUNT') {
       if (booking.status === 'Draft') {
         return res.status(403).json({ message: 'You cannot view draft bookings' });
       }
     }
+    // Agents: can view any booking (e.g. found via search by PNR/contact); edit rules still apply in PUT
     
     res.json(booking);
   } catch (error) {
@@ -245,7 +243,7 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// Search booking by PNR or Contact Number (role-based same as list)
+// Search booking by PNR or Contact Number — any user can find by PNR/contact (no assignment filter)
 router.get('/search/:query', auth, async (req, res) => {
   try {
     const searchTerm = req.params.query;
@@ -255,11 +253,10 @@ router.get('/search/:query', auth, async (req, res) => {
         { contactNumber: { $regex: searchTerm, $options: 'i' } }
       ]
     };
-    if (req.user.role === 'AGENT1' || req.user.role === 'AGENT2') {
-      findQuery.submittedBy = req.user._id;
-    } else if (req.user.role === 'ACCOUNT') {
+    if (req.user.role === 'ACCOUNT') {
       findQuery.status = { $ne: 'Draft' };
     }
+    // Agents and Admin: no submittedBy filter — search returns any matching PNR/contact
     
     const bookings = await Booking.find(findQuery)
       .populate('submittedBy', 'name email')
