@@ -91,7 +91,21 @@ app.get('/', (req, res) => {
   });
 });
 
-// Test route (without DB) - for debugging
+// Handle /api route explicitly
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: 'Travel Window Backend API',
+    status: 'running',
+    endpoints: {
+      test: '/api/test',
+      health: '/api/health',
+      auth: '/api/auth/login'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test route (without DB) - handle both /test and /api/test
 app.get('/test', (req, res) => {
   res.json({ 
     message: 'Backend working', 
@@ -101,8 +115,28 @@ app.get('/test', (req, res) => {
   });
 });
 
-// Health check (without DB dependency)
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    message: 'Backend working', 
+    path: req.path,
+    originalUrl: req.originalUrl,
+    timestamp: new Date().toISOString() 
+  });
+});
+
+// Health check (without DB dependency) - handle both /health and /api/health
 app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    connected: isConnected,
+    readyState: mongoose.connection.readyState,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
     connected: isConnected,
