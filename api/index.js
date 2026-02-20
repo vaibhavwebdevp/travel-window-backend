@@ -19,9 +19,21 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Root route
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Travel Window Backend API',
+    status: 'running',
+    endpoints: {
+      test: '/api/test',
+      health: '/api/health'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Simple test route
 // Vercel auto-detects /api/index.js and routes /api/* to this function
-// So /api/test becomes /test in Express
 app.get('/test', (req, res) => {
   res.json({ message: 'Backend working', timestamp: new Date().toISOString() });
 });
