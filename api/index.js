@@ -79,5 +79,11 @@ app.use((req, res) => {
   });
 });
 
-// Export serverless handler
-module.exports = serverless(app);
+// Export serverless handler with timeout configuration
+module.exports = serverless(app, {
+  binary: ['image/*', 'application/pdf'],
+  request: (request, event, context) => {
+    // Set timeout to prevent hanging
+    request.timeout = 10000; // 10 seconds
+  }
+});
