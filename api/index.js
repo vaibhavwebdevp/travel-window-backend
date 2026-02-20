@@ -1,8 +1,19 @@
 // Vercel serverless function wrapper for Express app - MINIMAL TEST VERSION
 const express = require('express');
 const serverless = require('serverless-http');
+const cors = require('cors');
 
 const app = express();
+
+// CORS middleware
+app.use(cors({
+  origin: [
+    'https://travel-window-frontend.vercel.app',
+    'http://localhost:4200',
+    'http://localhost:3000'
+  ],
+  credentials: true
+}));
 
 // Basic middleware
 app.use(express.json());
