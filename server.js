@@ -1,3 +1,4 @@
+// Local development only - Vercel uses api/index.js
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -28,7 +29,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/payments', require('./routes/payments'));
 
 // MongoDB Connection
-mongoose.connect(process.env.travel_window_MONGODB_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/travel_agency', {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/travel_agency', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })

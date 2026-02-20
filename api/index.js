@@ -1,9 +1,7 @@
-// Vercel serverless function wrapper for Express app
+// Vercel serverless function - Express is first-class on Vercel
 const express = require('express');
-const serverless = require('serverless-http');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path');
 
 const app = express();
 
@@ -172,16 +170,15 @@ const ensureDB = async (req, res, next) => {
   }
 };
 
-// Routes - Vercel routes /api/* to this function
-// Express receives paths WITHOUT /api prefix, so /api/auth becomes /auth
-app.use('/auth', ensureDB, require(path.join(__dirname, '../routes/auth')));
-app.use('/users', ensureDB, require(path.join(__dirname, '../routes/users')));
-app.use('/bookings', ensureDB, require(path.join(__dirname, '../routes/bookings')));
-app.use('/suppliers', ensureDB, require(path.join(__dirname, '../routes/suppliers')));
-app.use('/reports', ensureDB, require(path.join(__dirname, '../routes/reports')));
-app.use('/dashboard', ensureDB, require(path.join(__dirname, '../routes/dashboard')));
-app.use('/payments', ensureDB, require(path.join(__dirname, '../routes/payments')));
-app.use('/seed', ensureDB, require(path.join(__dirname, '../routes/seed')));
+// Routes - use relative paths so Vercel can trace dependencies
+app.use('/auth', ensureDB, require('../routes/auth'));
+app.use('/users', ensureDB, require('../routes/users'));
+app.use('/bookings', ensureDB, require('../routes/bookings'));
+app.use('/suppliers', ensureDB, require('../routes/suppliers'));
+app.use('/reports', ensureDB, require('../routes/reports'));
+app.use('/dashboard', ensureDB, require('../routes/dashboard'));
+app.use('/payments', ensureDB, require('../routes/payments'));
+app.use('/seed', ensureDB, require('../routes/seed'));
 
 // Catch-all route for debugging
 app.use((req, res) => {
@@ -194,5 +191,5 @@ app.use((req, res) => {
   });
 });
 
-// Export wrapped handler - required when using explicit routes in vercel.json
-module.exports = serverless(app);
+// Export app - Vercel handles Express natively
+module.exports = app;
