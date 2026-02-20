@@ -88,16 +88,30 @@ const connectDB = async () => {
   return cached.conn;
 };
 
+// API info payload - all endpoints
+const apiEndpoints = {
+  test: 'GET /api/test',
+  health: 'GET /api/health',
+  auth: {
+    login: 'POST /api/auth/login',
+    register: 'POST /api/auth/register',
+    me: 'GET /api/auth/me'
+  },
+  users: 'GET/POST/PUT/DELETE /api/users',
+  bookings: 'GET/POST/PUT/DELETE /api/bookings',
+  suppliers: 'GET/POST/PUT/DELETE /api/suppliers',
+  reports: 'GET /api/reports',
+  dashboard: 'GET /api/dashboard',
+  payments: 'GET/POST /api/payments',
+  seed: 'GET/POST /api/seed?secret=SEED_SECRET'
+};
+
 // Root route (for /api and /)
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Travel Window Backend API',
     status: 'running',
-    endpoints: {
-      test: '/api/test',
-      health: '/api/health',
-      auth: '/api/auth/login'
-    },
+    endpoints: apiEndpoints,
     timestamp: new Date().toISOString()
   });
 });
@@ -105,11 +119,7 @@ app.get('/api', (req, res) => {
   res.json({ 
     message: 'Travel Window Backend API',
     status: 'running',
-    endpoints: {
-      test: '/api/test',
-      health: '/api/health',
-      auth: '/api/auth/login'
-    },
+    endpoints: apiEndpoints,
     timestamp: new Date().toISOString()
   });
 });
