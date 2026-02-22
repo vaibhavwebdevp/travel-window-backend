@@ -33,13 +33,9 @@ const calculateTotals = (booking) => {
   }
 };
 
-// Create booking (Agent1 and Admin only)
+// Create booking (Agent1, Agent2, Account, Admin)
 router.post('/', auth, async (req, res) => {
   try {
-    if (req.user.role === 'AGENT2') {
-      return res.status(403).json({ message: 'Agent2 cannot create bookings' });
-    }
-    
     const {
       paxName,
       contactPerson,
@@ -283,54 +279,13 @@ router.put('/:id', auth, async (req, res) => {
     const isSubmitted = booking.status !== 'Draft';
     const isVerified = booking.verifiedByAccount || booking.verifiedByAdmin;
     
-    // Role-based edit permissions
-    if (userRole === 'AGENT2') {
-      if (isSubmitted) {
-        // Agent2 can only edit commercial fields after submission
-        const { supplier, ourCost, salePrice, additionalService, additionalServicePrice } = req.body;
-        
-        if (supplier !== undefined) {
-          const supplierDoc = await Supplier.findById(supplier);
-          if (supplierDoc) {
-            const oldSupplierName = booking.supplierName;
-            booking.supplier = supplier;
-            booking.supplierName = supplierDoc.name;
-            if (supplierDoc.name === 'Agent2') {
-              booking.status = 'Unticketed';
-            } else if (oldSupplierName === 'Agent2' && supplierDoc.name !== 'Agent2') {
-              booking.status = 'Ticked';
-            }
-          }
-        }
-        if (ourCost !== undefined) booking.ourCost = ourCost;
-        if (salePrice !== undefined) booking.salePrice = salePrice;
-        if (additionalService !== undefined) booking.additionalService = additionalService;
-        if (additionalServicePrice !== undefined) booking.additionalServicePrice = additionalServicePrice;
-        
-        calculateTotals(booking);
-        
-        addProgressHistory(booking, 'Commercial Details Updated', req.user, {
-          supplier: booking.supplierName,
-          ourCost: booking.ourCost,
-          salePrice: booking.salePrice
-        });
-        
-        await booking.save();
-        return res.json(await Booking.findById(booking._id).populate('supplier', 'name'));
-      } else {
-        return res.status(403).json({ message: 'Agent2 cannot edit bookings before submission' });
-      }
-    }
-    
-    if (userRole === 'AGENT1') {
+    // Agent1 & Agent2: full edit until verified (including payments)
+    if (userRole === 'AGENT1' || userRole === 'AGENT2') {
       if (isVerified) {
         return res.status(403).json({ message: 'Cannot edit verified bookings' });
       }
-      
-      // Agent1 can edit all fields before verification
       const updates = req.body;
       const changes = {};
-      
       if (updates.supplier !== undefined) {
         const supplierDoc = await Supplier.findById(updates.supplier);
         if (supplierDoc) {
@@ -345,49 +300,75 @@ router.put('/:id', auth, async (req, res) => {
           changes.supplier = supplierDoc.name;
         }
       }
-      
+      const allowedKeys = ['paxName', 'contactPerson', 'contactNumber', 'sectorType', 'travelDate',
+        'from', 'to', 'returnDate', 'multipleSectors', 'note', 'airline',
+        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'payments'];
       Object.keys(updates).forEach(key => {
-        if (['paxName', 'contactPerson', 'contactNumber', 'sectorType', 'travelDate', 
-             'from', 'to', 'returnDate', 'multipleSectors', 'note', 'airline', 
-             'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice'].includes(key)) {
-          if (key === 'paxName') {
-            booking[key] = updates[key].toUpperCase();
+        if (allowedKeys.includes(key)) {
+          if (key === 'payments') {
+            booking.payments = Array.isArray(updates[key]) ? updates[key] : booking.payments;
+          } else if (key === 'paxName') {
+            booking[key] = (updates[key] || '').toString().toUpperCase();
+          } else if (key === 'contactPerson') {
+            booking[key] = (updates[key] || '').toString().replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
           } else if (key === 'from' || key === 'to') {
-            booking[key] = updates[key].charAt(0).toUpperCase() + updates[key].slice(1);
+            const v = (updates[key] || '').toString();
+            booking[key] = v.charAt(0).toUpperCase() + v.slice(1);
           } else if (key === 'travelDate' || key === 'returnDate') {
-            booking[key] = new Date(updates[key]);
+            booking[key] = updates[key] ? new Date(updates[key]) : null;
           } else {
             booking[key] = updates[key];
           }
-          changes[key] = updates[key];
+          if (key !== 'payments') changes[key] = updates[key];
         }
       });
-      
+      if (updates.payments !== undefined) {
+        addProgressHistory(booking, 'Payments Updated', req.user, { payments: updates.payments });
+      }
       calculateTotals(booking);
-      
       if (Object.keys(changes).length > 0) {
         addProgressHistory(booking, 'Booking Updated', req.user, changes);
       }
-      
       await booking.save();
       return res.json(await Booking.findById(booking._id).populate('supplier', 'name'));
     }
-    
+
+    // Account: can add/edit booking (full edit like Admin)
     if (userRole === 'ACCOUNT') {
-      // Account can only edit payment-related fields
-      const { payments, billingStatus } = req.body;
-      
-      if (payments !== undefined) {
-        booking.payments = payments;
-        calculateTotals(booking);
-        addProgressHistory(booking, 'Payments Updated', req.user, { payments });
+      const updates = req.body;
+      const changes = {};
+      if (updates.supplier !== undefined && updates.supplier) {
+        const supplierDoc = await Supplier.findById(updates.supplier);
+        if (supplierDoc) {
+          const oldSupplierName = booking.supplierName;
+          booking.supplier = updates.supplier;
+          booking.supplierName = supplierDoc.name;
+          if (supplierDoc.name === 'Agent2') booking.status = 'Unticketed';
+          else if (oldSupplierName === 'Agent2' && supplierDoc.name !== 'Agent2') booking.status = 'Ticked';
+          changes.supplier = supplierDoc.name;
+        }
       }
-      
-      if (billingStatus !== undefined) {
-        booking.billingStatus = billingStatus;
-        addProgressHistory(booking, 'Billing Status Updated', req.user, { billingStatus });
-      }
-      
+      const allowedKeys = ['paxName', 'contactPerson', 'contactNumber', 'sectorType', 'travelDate',
+        'from', 'to', 'returnDate', 'multipleSectors', 'note', 'airline',
+        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'payments', 'billingStatus'];
+      allowedKeys.forEach(key => {
+        if (updates[key] === undefined) return;
+        if (key === 'payments') {
+          booking.payments = Array.isArray(updates[key]) ? updates[key] : booking.payments;
+        } else if (key === 'paxName') {
+          booking[key] = (updates[key] || '').toString().toUpperCase();
+        } else if (key === 'from' || key === 'to') {
+          const v = (updates[key] || '').toString();
+          booking[key] = v.charAt(0).toUpperCase() + v.slice(1);
+        } else if (key === 'travelDate' || key === 'returnDate') {
+          booking[key] = updates[key] ? new Date(updates[key]) : null;
+        } else {
+          booking[key] = updates[key];
+        }
+        changes[key] = updates[key];
+      });
+      calculateTotals(booking);
+      addProgressHistory(booking, 'Booking Updated by Account', req.user, changes);
       await booking.save();
       return res.json(await Booking.findById(booking._id).populate('supplier', 'name'));
     }
@@ -455,8 +436,8 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// Submit booking (Agent1)
-router.post('/:id/submit', auth, authorize('AGENT1', 'ADMIN'), async (req, res) => {
+// Submit booking (Agent1, Agent2)
+router.post('/:id/submit', auth, authorize('AGENT1', 'AGENT2', 'ADMIN'), async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
     if (!booking) {
