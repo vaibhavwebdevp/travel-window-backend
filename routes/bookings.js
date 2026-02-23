@@ -20,8 +20,11 @@ const addProgressHistory = (booking, action, user, changes = {}, remarks = '') =
 
 // Helper function to calculate totals
 const calculateTotals = (booking) => {
-  booking.totalSalePrice = booking.salePrice + (booking.additionalServicePrice || 0);
-  booking.totalPaidAmount = booking.payments.reduce((sum, p) => sum + p.paidAmount, 0);
+  const additionalTotal = (booking.additionalServices && booking.additionalServices.length)
+    ? booking.additionalServices.reduce((sum, x) => sum + (x.serviceCost || 0), 0)
+    : (booking.additionalServicePrice || 0);
+  booking.totalSalePrice = (booking.salePrice || 0) + additionalTotal;
+  booking.totalPaidAmount = (booking.payments || []).reduce((sum, p) => sum + p.paidAmount, 0);
   booking.balanceAmount = booking.totalSalePrice - booking.totalPaidAmount;
   
   if (booking.balanceAmount <= 0) {
@@ -33,8 +36,24 @@ const calculateTotals = (booking) => {
   }
 };
 
+// Normalize payments so paidAmount is number and paymentDate is valid Date (avoids blank save)
+const normalizePayments = (payments) => {
+  if (!Array.isArray(payments)) return [];
+  return payments.map(p => {
+    const paidAmount = typeof p.paidAmount === 'number' ? p.paidAmount : parseFloat(p.paidAmount) || 0;
+    const d = p.paymentDate ? new Date(p.paymentDate) : new Date();
+    const paymentDate = !isNaN(d.getTime()) ? d : new Date();
+    return {
+      paidAmount,
+      paymentMode: p.paymentMode || 'Cash',
+      paymentDate,
+      referenceNo: p.referenceNo || ''
+    };
+  });
+};
+
 // Create booking (Agent1, Agent2, Account, Admin)
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN'), async (req, res) => {
   try {
     const {
       paxName,
@@ -54,6 +73,7 @@ router.post('/', auth, async (req, res) => {
       salePrice,
       additionalService,
       additionalServicePrice,
+      additionalServices,
       paymentType,
       payments
     } = req.body;
@@ -83,9 +103,25 @@ router.post('/', auth, async (req, res) => {
     }
     
     const isAgent2Supplier = supplierName === 'Agent2';
+    const isAdminOrAccount = req.user.role === 'ADMIN' || req.user.role === 'ACCOUNT';
+    const contactPersonTitleCase = (contactPerson || '').toString().replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+    const normalizedAdditionalServices = Array.isArray(additionalServices) && additionalServices.length
+      ? additionalServices.map(x => ({ serviceName: (x.serviceName || '').toString(), serviceCost: typeof x.serviceCost === 'number' ? x.serviceCost : parseFloat(x.serviceCost) || 0 }))
+      : (additionalService ? [{ serviceName: additionalService, serviceCost: additionalServicePrice ?? 0 }] : []);
+
+    let initialStatus = 'Draft';
+    let dateOfSubmissionVal = undefined;
+    if (isAgent2Supplier) {
+      initialStatus = 'Unticketed';
+      dateOfSubmissionVal = new Date();
+    } else if (isAdminOrAccount) {
+      initialStatus = 'Pending Verification';
+      dateOfSubmissionVal = new Date();
+    }
+
     const booking = new Booking({
       paxName: paxName.toUpperCase(),
-      contactPerson: contactPerson || '',
+      contactPerson: contactPersonTitleCase,
       contactNumber,
       pnr: pnr.toUpperCase(),
       sectorType,
@@ -102,12 +138,13 @@ router.post('/', auth, async (req, res) => {
       salePrice: salePrice || 0,
       additionalService: additionalService || '',
       additionalServicePrice: additionalServicePrice ?? 0,
+      additionalServices: normalizedAdditionalServices,
       paymentType: paymentType || 'Full',
-      payments: payments || [],
+      payments: normalizePayments(payments),
       submittedBy: req.user._id,
       submittedByName: req.user.name,
-      status: isAgent2Supplier ? 'Unticketed' : 'Draft',
-      dateOfSubmission: isAgent2Supplier ? new Date() : undefined
+      status: initialStatus,
+      dateOfSubmission: dateOfSubmissionVal
     });
     
     calculateTotals(booking);
@@ -147,11 +184,11 @@ router.get('/', auth, async (req, res) => {
     
     const query = {};
     
-    // Role-based visibility: Agent1 only their bookings; Agent2 sees all submitted (to edit commercial); Account non-Draft; Admin all
+    // Role-based visibility: Agent1 only their bookings; Agent2 sees all (incl. drafts); Account non-Draft; Admin all
     if (req.user.role === 'AGENT1') {
       query.submittedBy = req.user._id;
     } else if (req.user.role === 'AGENT2') {
-      query.status = { $ne: 'Draft' };
+      // Agent2 sees all bookings (no status filter)
     } else if (req.user.role === 'ACCOUNT') {
       query.status = { $ne: 'Draft' };
     }
@@ -302,11 +339,16 @@ router.put('/:id', auth, async (req, res) => {
       }
       const allowedKeys = ['paxName', 'contactPerson', 'contactNumber', 'sectorType', 'travelDate',
         'from', 'to', 'returnDate', 'multipleSectors', 'note', 'airline',
-        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'payments'];
+        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'additionalServices', 'payments'];
       Object.keys(updates).forEach(key => {
         if (allowedKeys.includes(key)) {
-          if (key === 'payments') {
-            booking.payments = Array.isArray(updates[key]) ? updates[key] : booking.payments;
+          if (key === 'additionalServices') {
+            booking.additionalServices = Array.isArray(updates[key]) ? updates[key].map(x => ({
+              serviceName: (x.serviceName || '').toString(),
+              serviceCost: typeof x.serviceCost === 'number' ? x.serviceCost : parseFloat(x.serviceCost) || 0
+            })) : [];
+          } else if (key === 'payments') {
+            booking.payments = Array.isArray(updates[key]) ? normalizePayments(updates[key]) : booking.payments;
           } else if (key === 'paxName') {
             booking[key] = (updates[key] || '').toString().toUpperCase();
           } else if (key === 'contactPerson') {
@@ -350,13 +392,20 @@ router.put('/:id', auth, async (req, res) => {
       }
       const allowedKeys = ['paxName', 'contactPerson', 'contactNumber', 'sectorType', 'travelDate',
         'from', 'to', 'returnDate', 'multipleSectors', 'note', 'airline',
-        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'payments', 'billingStatus'];
+        'ourCost', 'salePrice', 'additionalService', 'additionalServicePrice', 'additionalServices', 'payments', 'billingStatus'];
       allowedKeys.forEach(key => {
         if (updates[key] === undefined) return;
-        if (key === 'payments') {
-          booking.payments = Array.isArray(updates[key]) ? updates[key] : booking.payments;
+        if (key === 'additionalServices') {
+          booking.additionalServices = Array.isArray(updates[key]) ? updates[key].map(x => ({
+            serviceName: (x.serviceName || '').toString(),
+            serviceCost: typeof x.serviceCost === 'number' ? x.serviceCost : parseFloat(x.serviceCost) || 0
+          })) : [];
+        } else if (key === 'payments') {
+          booking.payments = Array.isArray(updates[key]) ? normalizePayments(updates[key]) : booking.payments;
         } else if (key === 'paxName') {
           booking[key] = (updates[key] || '').toString().toUpperCase();
+        } else if (key === 'contactPerson') {
+          booking[key] = (updates[key] || '').toString().replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
         } else if (key === 'from' || key === 'to') {
           const v = (updates[key] || '').toString();
           booking[key] = v.charAt(0).toUpperCase() + v.slice(1);
@@ -529,6 +578,7 @@ router.post('/:id/date-change', auth, async (req, res) => {
       newReturnDate, 
       newOurCost, 
       newSalePrice, 
+      payments: newPayments,
       remarks 
     } = req.body;
     
@@ -581,6 +631,10 @@ router.post('/:id/date-change', auth, async (req, res) => {
     if (newSalePrice !== undefined) {
       booking.salePrice = newSalePrice;
     }
+    if (Array.isArray(newPayments) && newPayments.length > 0) {
+      const merged = normalizePayments(newPayments);
+      booking.payments = (booking.payments || []).concat(merged);
+    }
     
     calculateTotals(booking);
     booking.dateChanges.push(dateChange);
@@ -604,7 +658,7 @@ router.post('/:id/flight-change', auth, async (req, res) => {
       return res.status(404).json({ message: 'Booking not found' });
     }
     
-    const { newDetails, remarks } = req.body;
+    const { newDetails, newOurCost, newSalePrice, payments: newPayments, remarks } = req.body;
     
     if (!remarks) {
       return res.status(400).json({ message: 'Remarks are mandatory' });
@@ -634,7 +688,14 @@ router.post('/:id/flight-change', auth, async (req, res) => {
       if (newDetails.travelDate !== undefined) booking.travelDate = new Date(newDetails.travelDate);
       if (newDetails.returnDate !== undefined) booking.returnDate = new Date(newDetails.returnDate);
     }
+    if (newOurCost !== undefined && newOurCost !== null) booking.ourCost = newOurCost;
+    if (newSalePrice !== undefined && newSalePrice !== null) booking.salePrice = newSalePrice;
+    if (Array.isArray(newPayments) && newPayments.length > 0) {
+      const merged = normalizePayments(newPayments);
+      booking.payments = (booking.payments || []).concat(merged);
+    }
     
+    calculateTotals(booking);
     booking.flightChanges.push(flightChange);
     
     addProgressHistory(booking, 'Flight Change', req.user, flightChange, remarks);
@@ -706,8 +767,8 @@ router.post('/:id/seat-book', auth, async (req, res) => {
   }
 });
 
-// Cancel booking (Account or Admin only)
-router.post('/:id/cancel', auth, authorize('ACCOUNT', 'ADMIN'), async (req, res) => {
+// Cancel booking (Agent1, Agent2, Account, Admin per spec)
+router.post('/:id/cancel', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN'), async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
     if (!booking) {
@@ -719,6 +780,8 @@ router.post('/:id/cancel', auth, authorize('ACCOUNT', 'ADMIN'), async (req, res)
       refundableAmount,
       committedToClient,
       chargeFromClient,
+      supplierCancellationCharges = 0,
+      ourCancellationCharges = 0,
       remarks
     } = req.body;
     
@@ -726,31 +789,54 @@ router.post('/:id/cancel', auth, authorize('ACCOUNT', 'ADMIN'), async (req, res)
       return res.status(400).json({ message: 'Payment mode and remarks are required' });
     }
     
-    const totalAmountPaid = booking.totalPaidAmount;
-    const oldMargin = booking.salePrice - booking.ourCost;
+    const totalSalePrice = booking.totalSalePrice || booking.salePrice || 0;
+    const totalAmountPaid = booking.totalPaidAmount || 0;
+    const oldMargin = (booking.salePrice || 0) - (booking.ourCost || 0);
+    const scc = parseFloat(supplierCancellationCharges) || 0;
+    const occ = parseFloat(ourCancellationCharges) || 0;
+    const chargeFromClientVal = chargeFromClient != null ? parseFloat(chargeFromClient) : 0;
+    const committedToClientVal = committedToClient != null ? parseFloat(committedToClient) : 0;
     
+    let refundableAmountToClient = 0;
+    let currentMargin = oldMargin;
     let newMargin = 0;
+    let refundCommittedToClient = 0;
+    let totalCancellationCharges = 0;
+    let refundableAmountCommittedToClient = 0;
+    
     if (paymentModeWas === 'Credit Card') {
-      if (chargeFromClient === undefined) {
+      refundableAmountToClient = totalSalePrice - scc;
+      currentMargin = oldMargin + scc + refundableAmountToClient - totalSalePrice;
+      newMargin = chargeFromClientVal + currentMargin;
+      refundCommittedToClient = totalSalePrice - scc - chargeFromClientVal;
+      if (chargeFromClient === undefined || chargeFromClient === null) {
         return res.status(400).json({ message: 'Charge from client is required for credit card payments' });
       }
-      newMargin = booking.salePrice - chargeFromClient;
     } else {
-      if (committedToClient === undefined) {
-        return res.status(400).json({ message: 'Committed to client is required' });
+      totalCancellationCharges = oldMargin + scc + occ;
+      refundableAmountCommittedToClient = totalSalePrice - totalCancellationCharges;
+      newMargin = totalSalePrice - committedToClientVal;
+      if (committedToClient === undefined && committedToClientVal === 0) {
+        return res.status(400).json({ message: 'Committed to client (refundable amount) is required for non-credit card' });
       }
-      newMargin = booking.salePrice - committedToClient;
     }
     
     booking.cancellation = {
       isCancelled: true,
       paymentModeWas,
       totalAmountPaidByClient: totalAmountPaid,
-      refundableAmount: refundableAmount || 0,
+      refundableAmount: refundableAmount || (paymentModeWas === 'Credit Card' ? refundableAmountToClient : refundableAmountCommittedToClient),
       oldMargin,
-      committedToClient: committedToClient || 0,
-      chargeFromClient: chargeFromClient || 0,
+      committedToClient: paymentModeWas === 'Credit Card' ? refundCommittedToClient : committedToClientVal,
+      chargeFromClient: chargeFromClientVal,
       newMargin,
+      supplierCancellationCharges: scc,
+      ourCancellationCharges: occ,
+      currentMargin,
+      totalCancellationCharges,
+      refundableAmountToClient,
+      refundableAmountCommittedToClient,
+      refundCommittedToClient,
       refundProcessed: false,
       remarks,
       cancelledBy: req.user._id,
