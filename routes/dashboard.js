@@ -10,13 +10,17 @@ const router = express.Router();
 router.get('/stats', auth, async (req, res) => {
   try {
     const baseQuery = {};
-    if (req.user.role === 'AGENT1' || req.user.role === 'AGENT2') {
+    if (req.user.role === 'AGENT1') {
       baseQuery.submittedBy = req.user._id;
+    } else if (req.user.role === 'AGENT2') {
+      // Agent2 sees all bookings (same as list API) so counts match Unticketed list
+      // no baseQuery filter
     } else if (req.user.role === 'ACCOUNT') {
-      // Account sees only submitted and beyond (no Draft)
       baseQuery.status = { $ne: 'Draft' };
     }
 
+    // Unticketed list shows supplierName Agent2 + status != Cancelled (same as list API filter)
+    const unticketedQuery = { ...baseQuery, supplierName: 'Agent2', status: { $ne: 'Cancelled' } };
     const [
       totalBookings,
       draftCount,
@@ -28,7 +32,7 @@ router.get('/stats', auth, async (req, res) => {
       Booking.countDocuments(baseQuery),
       Booking.countDocuments({ ...baseQuery, status: 'Draft' }),
       Booking.countDocuments({ ...baseQuery, status: 'Pending Verification' }),
-      Booking.countDocuments({ ...baseQuery, status: 'Unticketed' }),
+      Booking.countDocuments(unticketedQuery),
       Booking.countDocuments({ ...baseQuery, status: 'Cancelled' }),
       req.user.role === 'ADMIN' ? User.countDocuments({ isActive: true }) : Promise.resolve(null)
     ]);

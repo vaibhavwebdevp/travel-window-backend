@@ -27,6 +27,27 @@ router.get('/agents', auth, authorize('ADMIN'), async (req, res) => {
   }
 });
 
+// Get users that current user can assign a booking to (Account, Agent2, Admin)
+// Admin → Agent1, Agent2, Account; Account (Rajesh) → Agent1, Agent2; Agent2 (Rakesh) → Agent1
+router.get('/assignable', auth, authorize('ACCOUNT', 'AGENT2', 'ADMIN'), async (req, res) => {
+  try {
+    let roles = [];
+    if (req.user.role === 'ADMIN') {
+      roles = ['AGENT1', 'AGENT2', 'ACCOUNT'];
+    } else if (req.user.role === 'ACCOUNT') {
+      roles = ['AGENT1', 'AGENT2'];
+    } else if (req.user.role === 'AGENT2') {
+      roles = ['AGENT1'];
+    }
+    const users = await User.find({ role: { $in: roles }, isActive: true })
+      .select('_id name email role')
+      .sort({ role: 1, name: 1 });
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Create user (Admin only)
 router.post('/', auth, authorize('ADMIN'), async (req, res) => {
   try {

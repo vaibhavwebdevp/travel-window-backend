@@ -249,6 +249,46 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// Assign booking to a user (Account → Agent1/Agent2; Agent2 → Agent1; Admin → Agent1/Agent2/Account), with comment
+router.post('/:id/assign', auth, async (req, res) => {
+  try {
+    const { assignToUserId, comment } = req.body || {};
+    if (!assignToUserId) {
+      return res.status(400).json({ message: 'assignToUserId is required' });
+    }
+    const canAssign = ['ADMIN', 'ACCOUNT', 'AGENT2'].includes(req.user.role);
+    if (!canAssign) {
+      return res.status(403).json({ message: 'You cannot assign bookings' });
+    }
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+    const User = require('../models/User');
+    const assignToUser = await User.findById(assignToUserId).select('name role isActive');
+    if (!assignToUser || assignToUser.isActive === false) {
+      return res.status(400).json({ message: 'Invalid assignee user' });
+    }
+    const allowedRoles = req.user.role === 'ADMIN' ? ['AGENT1', 'AGENT2', 'ACCOUNT'] : req.user.role === 'ACCOUNT' ? ['AGENT1', 'AGENT2'] : ['AGENT1'];
+    if (!allowedRoles.includes(assignToUser.role)) {
+      return res.status(403).json({ message: 'You cannot assign to this user' });
+    }
+    booking.assignedTo = assignToUserId;
+    addProgressHistory(booking, `Assigned to ${assignToUser.name}`, req.user, { assignToUserId, assignToName: assignToUser.name }, comment || '');
+    await booking.save();
+    const updated = await Booking.findById(booking._id)
+      .populate('submittedBy', 'name email')
+      .populate('supplier', 'name')
+      .populate('assignedTo', 'name email')
+      .populate('verifiedByAccountUser', 'name email')
+      .populate('verifiedByAdminUser', 'name email');
+    res.json(updated);
+  } catch (error) {
+    console.error('Assign booking error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Get booking by ID — any agent can view (e.g. after search by PNR); Account no Draft; Admin all
 router.get('/:id', auth, async (req, res) => {
   try {
