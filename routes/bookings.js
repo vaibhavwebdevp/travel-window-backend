@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { auth, authorize } = require('../middleware/auth');
 const Booking = require('../models/Booking');
 const Supplier = require('../models/Supplier');
@@ -225,6 +226,52 @@ router.get('/', auth, async (req, res) => {
       query.dateOfSubmission = {};
       if (dateFrom) query.dateOfSubmission.$gte = new Date(dateFrom);
       if (dateTo) query.dateOfSubmission.$lte = new Date(dateTo);
+    }
+    
+    // Account: filter by verified (Verified / Unverified)
+    if (req.user.role === 'ACCOUNT' && req.query.verified) {
+      const v = req.query.verified;
+      if (v === 'verified') query.verifiedByAccount = true;
+      else if (v === 'unverified') query.verifiedByAccount = false;
+    }
+    
+    const sortAssignedFirst = ['AGENT1', 'AGENT2', 'ACCOUNT'].includes(req.user.role);
+    const limitNum = parseInt(limit, 10) || 50;
+    const skipNum = (Math.max(1, parseInt(page, 10)) - 1) * limitNum;
+    
+    if (sortAssignedFirst) {
+      const userId = new mongoose.Types.ObjectId(req.user._id);
+      const pipeline = [
+        { $match: query },
+        { $addFields: { _assignedToMe: { $eq: ['$assignedTo', userId] } } },
+        { $sort: { _assignedToMe: -1, dateOfSubmission: -1 } },
+        { $skip: skipNum },
+        { $limit: limitNum },
+        { $lookup: { from: 'users', localField: 'submittedBy', foreignField: '_id', as: 'submittedByDoc' } },
+        { $unwind: { path: '$submittedByDoc', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'suppliers', localField: 'supplier', foreignField: '_id', as: 'supplierDoc' } },
+        { $unwind: { path: '$supplierDoc', preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: 'users', localField: 'assignedTo', foreignField: '_id', as: 'assignedToDoc' } },
+        { $unwind: { path: '$assignedToDoc', preserveNullAndEmptyArrays: true } },
+        {
+          $addFields: {
+            submittedBy: '$submittedByDoc',
+            supplier: '$supplierDoc',
+            assignedTo: '$assignedToDoc'
+          }
+        },
+        { $project: { _assignedToMe: 0, submittedByDoc: 0, supplierDoc: 0, assignedToDoc: 0 } }
+      ];
+      const [bookings, countResult] = await Promise.all([
+        Booking.aggregate(pipeline),
+        Booking.countDocuments(query)
+      ]);
+      return res.json({
+        bookings,
+        totalPages: Math.ceil(countResult / limitNum),
+        currentPage: parseInt(page, 10) || 1,
+        total: countResult
+      });
     }
     
     const bookings = await Booking.find(query)
@@ -715,12 +762,20 @@ router.post('/:id/flight-change', auth, async (req, res) => {
     const flightChange = {
       oldDetails,
       newDetails: newDetails || {},
+      ourCostAddon: newOurCost != null ? parseFloat(newOurCost) || 0 : 0,
+      salePriceAddon: newSalePrice != null ? parseFloat(newSalePrice) || 0 : 0,
       remarks,
       changedBy: req.user._id,
       changedAt: new Date()
     };
     
-    // Update booking if new details provided
+    // Flight change charges are add-on only: add to existing ourCost/salePrice, do not replace
+    if (newOurCost !== undefined && newOurCost !== null) {
+      booking.ourCost = (booking.ourCost || 0) + (parseFloat(newOurCost) || 0);
+    }
+    if (newSalePrice !== undefined && newSalePrice !== null) {
+      booking.salePrice = (booking.salePrice || 0) + (parseFloat(newSalePrice) || 0);
+    }
     if (newDetails) {
       if (newDetails.airline !== undefined) booking.airline = newDetails.airline;
       if (newDetails.from !== undefined) booking.from = newDetails.from.charAt(0).toUpperCase() + newDetails.from.slice(1);
@@ -728,8 +783,6 @@ router.post('/:id/flight-change', auth, async (req, res) => {
       if (newDetails.travelDate !== undefined) booking.travelDate = new Date(newDetails.travelDate);
       if (newDetails.returnDate !== undefined) booking.returnDate = new Date(newDetails.returnDate);
     }
-    if (newOurCost !== undefined && newOurCost !== null) booking.ourCost = newOurCost;
-    if (newSalePrice !== undefined && newSalePrice !== null) booking.salePrice = newSalePrice;
     if (Array.isArray(newPayments) && newPayments.length > 0) {
       const merged = normalizePayments(newPayments);
       booking.payments = (booking.payments || []).concat(merged);
@@ -846,7 +899,8 @@ router.post('/:id/cancel', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN
     
     if (paymentModeWas === 'Credit Card') {
       refundableAmountToClient = totalSalePrice - scc;
-      currentMargin = oldMargin + scc + refundableAmountToClient - totalSalePrice;
+      const oldCost = booking.ourCost || 0;
+      currentMargin = (chargeFromClientVal != null ? parseFloat(chargeFromClientVal) : 0) - oldCost;
       newMargin = chargeFromClientVal + currentMargin;
       refundCommittedToClient = totalSalePrice - scc - chargeFromClientVal;
       if (chargeFromClient === undefined || chargeFromClient === null) {

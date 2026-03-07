@@ -237,6 +237,8 @@ const bookingSchema = new mongoose.Schema({
   flightChanges: [{
     oldDetails: mongoose.Schema.Types.Mixed,
     newDetails: mongoose.Schema.Types.Mixed,
+    ourCostAddon: { type: Number, default: 0 },
+    salePriceAddon: { type: Number, default: 0 },
     remarks: String,
     changedBy: {
       type: mongoose.Schema.Types.ObjectId,
