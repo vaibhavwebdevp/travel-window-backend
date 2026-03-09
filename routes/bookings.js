@@ -185,9 +185,12 @@ router.get('/', auth, async (req, res) => {
     
     const query = {};
     
-    // Role-based visibility: Agent1 only their bookings; Agent2 sees all (incl. drafts); Account non-Draft; Admin all
+    // Role-based visibility: Agent1 sees their own bookings OR assigned to them; Agent2 sees all; Account non-Draft; Admin all
     if (req.user.role === 'AGENT1') {
-      query.submittedBy = req.user._id;
+      query.$or = [
+        { submittedBy: req.user._id },
+        { assignedTo: req.user._id }
+      ];
     } else if (req.user.role === 'AGENT2') {
       // Agent2 sees all bookings (no status filter)
     } else if (req.user.role === 'ACCOUNT') {
@@ -402,13 +405,17 @@ router.put('/:id', auth, async (req, res) => {
     const userRole = req.user.role;
     const isSubmitted = booking.status !== 'Draft';
     const isVerified = booking.verifiedByAccount || booking.verifiedByAdmin;
-    
+
+    const updates = { ...req.body };
+    delete updates.submittedBy;
+    delete updates.submittedByName;
+    delete updates.dateOfSubmission;
+
     // Agent1 & Agent2: full edit until verified (including payments)
     if (userRole === 'AGENT1' || userRole === 'AGENT2') {
       if (isVerified) {
         return res.status(403).json({ message: 'Cannot edit verified bookings' });
       }
-      const updates = req.body;
       const changes = {};
       if (updates.supplier !== undefined) {
         const supplierDoc = await Supplier.findById(updates.supplier);
@@ -464,7 +471,6 @@ router.put('/:id', auth, async (req, res) => {
 
     // Account: can add/edit booking (full edit like Admin)
     if (userRole === 'ACCOUNT') {
-      const updates = req.body;
       const changes = {};
       if (updates.supplier !== undefined && updates.supplier) {
         const supplierDoc = await Supplier.findById(updates.supplier);
@@ -510,8 +516,7 @@ router.put('/:id', auth, async (req, res) => {
     }
     
     if (userRole === 'ADMIN') {
-      // Admin can edit everything (including status and cancellation revert)
-      const updates = req.body;
+      // Admin can edit everything (including status and cancellation revert); submittedBy/dateOfSubmission stay unchanged
       const changes = {};
       
       for (const key of Object.keys(updates)) {
@@ -697,39 +702,43 @@ router.post('/:id/date-change', auth, async (req, res) => {
       oldReturnDate: booking.returnDate,
       newReturnDate: changeReturnDate && newReturnDate ? new Date(newReturnDate) : booking.returnDate,
       oldOurCost: booking.ourCost,
-      newOurCost: newOurCost !== undefined ? newOurCost : booking.ourCost,
       oldSalePrice: booking.salePrice,
-      newSalePrice: newSalePrice !== undefined ? newSalePrice : booking.salePrice,
+      ourCostAddon: newOurCost != null ? parseFloat(newOurCost) || 0 : 0,
+      salePriceAddon: newSalePrice != null ? parseFloat(newSalePrice) || 0 : 0,
+      previousOurCostAddon: (booking.dateChanges && booking.dateChanges.length > 0)
+        ? (booking.dateChanges[booking.dateChanges.length - 1].ourCostAddon ?? 0) : undefined,
+      previousSalePriceAddon: (booking.dateChanges && booking.dateChanges.length > 0)
+        ? (booking.dateChanges[booking.dateChanges.length - 1].salePriceAddon ?? 0) : undefined,
       remarks,
       changedBy: req.user._id,
       changedAt: new Date()
     };
-    
-    // Update booking
+
+    // Date change charges are add-on only: add to existing ourCost/salePrice, do not replace
     if (changeTravelDate && newTravelDate) {
       booking.travelDate = new Date(newTravelDate);
     }
     if (changeReturnDate && newReturnDate) {
       booking.returnDate = new Date(newReturnDate);
     }
-    if (newOurCost !== undefined) {
-      booking.ourCost = newOurCost;
+    if (newOurCost !== undefined && newOurCost !== null) {
+      booking.ourCost = (booking.ourCost || 0) + (parseFloat(newOurCost) || 0);
     }
-    if (newSalePrice !== undefined) {
-      booking.salePrice = newSalePrice;
+    if (newSalePrice !== undefined && newSalePrice !== null) {
+      booking.salePrice = (booking.salePrice || 0) + (parseFloat(newSalePrice) || 0);
     }
     if (Array.isArray(newPayments) && newPayments.length > 0) {
       const merged = normalizePayments(newPayments);
       booking.payments = (booking.payments || []).concat(merged);
     }
-    
+
     calculateTotals(booking);
     booking.dateChanges.push(dateChange);
-    
+
     addProgressHistory(booking, 'Date Change', req.user, dateChange, remarks);
-    
+
     await booking.save();
-    
+
     res.json(await Booking.findById(booking._id).populate('supplier', 'name'));
   } catch (error) {
     console.error('Date change error:', error);
@@ -781,7 +790,7 @@ router.post('/:id/flight-change', auth, async (req, res) => {
       if (newDetails.from !== undefined) booking.from = newDetails.from.charAt(0).toUpperCase() + newDetails.from.slice(1);
       if (newDetails.to !== undefined) booking.to = newDetails.to.charAt(0).toUpperCase() + newDetails.to.slice(1);
       if (newDetails.travelDate !== undefined) booking.travelDate = new Date(newDetails.travelDate);
-      if (newDetails.returnDate !== undefined) booking.returnDate = new Date(newDetails.returnDate);
+      if (newDetails.returnDate !== undefined && booking.returnDate != null) booking.returnDate = new Date(newDetails.returnDate);
     }
     if (Array.isArray(newPayments) && newPayments.length > 0) {
       const merged = normalizePayments(newPayments);
@@ -899,8 +908,8 @@ router.post('/:id/cancel', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN
     
     if (paymentModeWas === 'Credit Card') {
       refundableAmountToClient = totalSalePrice - scc;
-      const oldCost = booking.ourCost || 0;
-      currentMargin = (chargeFromClientVal != null ? parseFloat(chargeFromClientVal) : 0) - oldCost;
+      const oldCost = Number(booking.ourCost) || 0;
+      currentMargin = Number(chargeFromClientVal) - oldCost;
       newMargin = chargeFromClientVal + currentMargin;
       refundCommittedToClient = totalSalePrice - scc - chargeFromClientVal;
       if (chargeFromClient === undefined || chargeFromClient === null) {

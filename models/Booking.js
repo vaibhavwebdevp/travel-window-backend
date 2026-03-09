@@ -223,6 +223,8 @@ const bookingSchema = new mongoose.Schema({
     newOurCost: Number,
     oldSalePrice: Number,
     newSalePrice: Number,
+    ourCostAddon: { type: Number, default: 0 },
+    salePriceAddon: { type: Number, default: 0 },
     remarks: String,
     changedBy: {
       type: mongoose.Schema.Types.ObjectId,
