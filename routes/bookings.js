@@ -214,7 +214,11 @@ router.get('/', auth, async (req, res) => {
     }
     
     if (supplier && supplier !== 'all') {
-      query.supplier = supplier;
+      try {
+        query.supplier = new mongoose.Types.ObjectId(supplier);
+      } catch (e) {
+        // invalid ObjectId string – leave supplier filter off
+      }
     }
     
     if (pnr) {
@@ -247,7 +251,7 @@ router.get('/', auth, async (req, res) => {
       const pipeline = [
         { $match: query },
         { $addFields: { _assignedToMe: { $eq: ['$assignedTo', userId] } } },
-        { $sort: { _assignedToMe: -1, dateOfSubmission: -1 } },
+        { $sort: { _id: -1 } },
         { $skip: skipNum },
         { $limit: limitNum },
         { $lookup: { from: 'users', localField: 'submittedBy', foreignField: '_id', as: 'submittedByDoc' } },
@@ -277,20 +281,25 @@ router.get('/', auth, async (req, res) => {
       });
     }
     
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNumFind = parseInt(limit, 10) || 50;
+    const skipNumFind = (pageNum - 1) * limitNumFind;
+
     const bookings = await Booking.find(query)
       .populate('submittedBy', 'name email')
       .populate('supplier', 'name')
       .populate('assignedTo', 'name email')
-      .sort({ dateOfSubmission: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-    
+      .sort({ _id: -1 })
+      .limit(limitNumFind)
+      .skip(skipNumFind);
+
     const total = await Booking.countDocuments(query);
-    
+    const totalPagesFind = Math.ceil(total / limitNumFind) || 1;
+
     res.json({
       bookings,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
+      totalPages: totalPagesFind,
+      currentPage: pageNum,
       total
     });
   } catch (error) {
