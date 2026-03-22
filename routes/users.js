@@ -78,10 +78,10 @@ router.post('/', auth, authorize('ADMIN'), async (req, res) => {
   }
 });
 
-// Update user (Admin only)
+// Update user (Admin only) — optional `password` sets a new password (min 6 chars)
 router.put('/:id', auth, authorize('ADMIN'), async (req, res) => {
   try {
-    const { email, role, name, isActive } = req.body;
+    const { email, role, name, isActive, password } = req.body;
     
     const user = await User.findById(req.params.id);
     if (!user) {
@@ -99,6 +99,14 @@ router.put('/:id', auth, authorize('ADMIN'), async (req, res) => {
     if (role) user.role = role;
     if (name) user.name = name;
     if (isActive !== undefined) user.isActive = isActive;
+
+    if (password !== undefined && password !== null && String(password).trim() !== '') {
+      const pw = String(password).trim();
+      if (pw.length < 6) {
+        return res.status(400).json({ message: 'New password must be at least 6 characters' });
+      }
+      user.password = pw;
+    }
     
     await user.save();
     
