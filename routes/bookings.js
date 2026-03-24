@@ -900,9 +900,17 @@ router.post('/:id/cancel', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN
       return res.status(400).json({ message: 'Payment mode and remarks are required' });
     }
     
-    const totalSalePrice = booking.totalSalePrice || booking.salePrice || 0;
+    // Cancellation is computed only on base booking values (date/flight add-ons are non-refundable).
+    const dateChangeSaleAddon = (booking.dateChanges || []).reduce((sum, d) => sum + (Number(d?.salePriceAddon) || 0), 0);
+    const flightChangeSaleAddon = (booking.flightChanges || []).reduce((sum, d) => sum + (Number(d?.salePriceAddon) || 0), 0);
+    const dateChangeOurAddon = (booking.dateChanges || []).reduce((sum, d) => sum + (Number(d?.ourCostAddon) || 0), 0);
+    const flightChangeOurAddon = (booking.flightChanges || []).reduce((sum, d) => sum + (Number(d?.ourCostAddon) || 0), 0);
+
+    const baseSalePrice = Math.max(0, (Number(booking.salePrice) || 0) - dateChangeSaleAddon - flightChangeSaleAddon);
+    const baseOurCost = Math.max(0, (Number(booking.ourCost) || 0) - dateChangeOurAddon - flightChangeOurAddon);
+    const totalSalePrice = baseSalePrice;
     const totalAmountPaid = booking.totalPaidAmount || 0;
-    const oldMargin = (booking.salePrice || 0) - (booking.ourCost || 0);
+    const oldMargin = baseSalePrice - baseOurCost;
     const scc = parseFloat(supplierCancellationCharges) || 0;
     const occ = parseFloat(ourCancellationCharges) || 0;
     const chargeFromClientVal = chargeFromClient != null ? parseFloat(chargeFromClient) : 0;
@@ -917,9 +925,9 @@ router.post('/:id/cancel', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN
     
     if (paymentModeWas === 'Credit Card') {
       refundableAmountToClient = totalSalePrice - scc;
-      const oldCost = Number(booking.ourCost) || 0;
-      currentMargin = Number(chargeFromClientVal) - oldCost;
-      newMargin = chargeFromClientVal + currentMargin;
+      const base = oldMargin;
+      currentMargin = chargeFromClientVal > 0 ? (chargeFromClientVal < base ? base - chargeFromClientVal : base) : 0;
+      newMargin = chargeFromClientVal > base ? chargeFromClientVal - base : 0;
       refundCommittedToClient = totalSalePrice - scc - chargeFromClientVal;
       if (chargeFromClient === undefined || chargeFromClient === null) {
         return res.status(400).json({ message: 'Charge from client is required for credit card payments' });
