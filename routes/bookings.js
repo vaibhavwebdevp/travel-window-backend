@@ -37,13 +37,27 @@ const calculateTotals = (booking) => {
   }
 };
 
+// Parse date inputs safely so date-only values don't shift by timezone.
+const parseDateInput = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    return new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
+  }
+  const dt = new Date(value);
+  return isNaN(dt.getTime()) ? null : dt;
+};
+
 // Normalize payments so paidAmount is number and paymentDate is valid Date (avoids blank save)
 const normalizePayments = (payments) => {
   if (!Array.isArray(payments)) return [];
   return payments.map(p => {
     const paidAmount = typeof p.paidAmount === 'number' ? p.paidAmount : parseFloat(p.paidAmount) || 0;
-    const d = p.paymentDate ? new Date(p.paymentDate) : new Date();
-    const paymentDate = !isNaN(d.getTime()) ? d : new Date();
+    const d = p.paymentDate ? parseDateInput(p.paymentDate) : new Date();
+    const paymentDate = d || new Date();
     return {
       paidAmount,
       paymentMode: p.paymentMode || 'Cash',
@@ -79,9 +93,21 @@ router.post('/', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN'), async 
       payments
     } = req.body;
     
+    const parsedTravelDate = parseDateInput(travelDate);
+    const parsedReturnDate = parseDateInput(returnDate);
+    const normalizedMultipleSectors = Array.isArray(multipleSectors)
+      ? multipleSectors.map(s => ({
+          ...s,
+          travelDate: parseDateInput(s?.travelDate)
+        }))
+      : [];
+
     // Validation
     if (!paxName || !contactNumber || !pnr || !sectorType || !travelDate || !from || !to) {
       return res.status(400).json({ message: 'Missing required fields' });
+    }
+    if (!parsedTravelDate) {
+      return res.status(400).json({ message: 'Invalid travel date' });
     }
     
     // Check if PNR already exists
@@ -126,11 +152,11 @@ router.post('/', auth, authorize('AGENT1', 'AGENT2', 'ACCOUNT', 'ADMIN'), async 
       contactNumber,
       pnr: pnr.toUpperCase(),
       sectorType,
-      travelDate: new Date(travelDate),
+      travelDate: parsedTravelDate,
       from: from.charAt(0).toUpperCase() + from.slice(1),
       to: to.charAt(0).toUpperCase() + to.slice(1),
-      returnDate: returnDate ? new Date(returnDate) : null,
-      multipleSectors: sectorType === 'Multiple' ? multipleSectors : [],
+      returnDate: parsedReturnDate,
+      multipleSectors: sectorType === 'Multiple' ? normalizedMultipleSectors : [],
       note: note || '',
       airline: airline || '',
       supplier: supplier || null,
@@ -427,10 +453,19 @@ router.put('/:id', auth, async (req, res) => {
       }
       const changes = {};
       if (updates.supplier !== undefined) {
-        const supplierDoc = await Supplier.findById(updates.supplier);
-        if (supplierDoc) {
-          const oldSupplierName = booking.supplierName;
-          booking.supplier = updates.supplier;
+        const supplierId = (updates.supplier || '').toString().trim();
+        const oldSupplierName = booking.supplierName;
+        if (!supplierId) {
+          booking.supplier = null;
+          booking.supplierName = '';
+          if (oldSupplierName === 'Agent2') booking.status = 'Ticked';
+          changes.supplier = '';
+        } else {
+          const supplierDoc = await Supplier.findById(supplierId);
+          if (!supplierDoc) {
+            return res.status(400).json({ message: 'Invalid supplier' });
+          }
+          booking.supplier = supplierDoc._id;
           booking.supplierName = supplierDoc.name;
           if (supplierDoc.name === 'Agent2') {
             booking.status = 'Unticketed';
@@ -450,6 +485,11 @@ router.put('/:id', auth, async (req, res) => {
               serviceName: (x.serviceName || '').toString(),
               serviceCost: typeof x.serviceCost === 'number' ? x.serviceCost : parseFloat(x.serviceCost) || 0
             })) : [];
+          } else if (key === 'multipleSectors') {
+            booking.multipleSectors = Array.isArray(updates[key]) ? updates[key].map(s => ({
+              ...s,
+              travelDate: parseDateInput(s?.travelDate)
+            })) : [];
           } else if (key === 'payments') {
             booking.payments = Array.isArray(updates[key]) ? normalizePayments(updates[key]) : booking.payments;
           } else if (key === 'paxName') {
@@ -460,7 +500,7 @@ router.put('/:id', auth, async (req, res) => {
             const v = (updates[key] || '').toString();
             booking[key] = v.charAt(0).toUpperCase() + v.slice(1);
           } else if (key === 'travelDate' || key === 'returnDate') {
-            booking[key] = updates[key] ? new Date(updates[key]) : null;
+            booking[key] = parseDateInput(updates[key]);
           } else {
             booking[key] = updates[key];
           }
@@ -481,11 +521,20 @@ router.put('/:id', auth, async (req, res) => {
     // Account: can add/edit booking (full edit like Admin)
     if (userRole === 'ACCOUNT') {
       const changes = {};
-      if (updates.supplier !== undefined && updates.supplier) {
-        const supplierDoc = await Supplier.findById(updates.supplier);
-        if (supplierDoc) {
-          const oldSupplierName = booking.supplierName;
-          booking.supplier = updates.supplier;
+      if (updates.supplier !== undefined) {
+        const supplierId = (updates.supplier || '').toString().trim();
+        const oldSupplierName = booking.supplierName;
+        if (!supplierId) {
+          booking.supplier = null;
+          booking.supplierName = '';
+          if (oldSupplierName === 'Agent2') booking.status = 'Ticked';
+          changes.supplier = '';
+        } else {
+          const supplierDoc = await Supplier.findById(supplierId);
+          if (!supplierDoc) {
+            return res.status(400).json({ message: 'Invalid supplier' });
+          }
+          booking.supplier = supplierDoc._id;
           booking.supplierName = supplierDoc.name;
           if (supplierDoc.name === 'Agent2') booking.status = 'Unticketed';
           else if (oldSupplierName === 'Agent2' && supplierDoc.name !== 'Agent2') booking.status = 'Ticked';
@@ -502,6 +551,11 @@ router.put('/:id', auth, async (req, res) => {
             serviceName: (x.serviceName || '').toString(),
             serviceCost: typeof x.serviceCost === 'number' ? x.serviceCost : parseFloat(x.serviceCost) || 0
           })) : [];
+        } else if (key === 'multipleSectors') {
+          booking.multipleSectors = Array.isArray(updates[key]) ? updates[key].map(s => ({
+            ...s,
+            travelDate: parseDateInput(s?.travelDate)
+          })) : [];
         } else if (key === 'payments') {
           booking.payments = Array.isArray(updates[key]) ? normalizePayments(updates[key]) : booking.payments;
         } else if (key === 'paxName') {
@@ -512,7 +566,7 @@ router.put('/:id', auth, async (req, res) => {
           const v = (updates[key] || '').toString();
           booking[key] = v.charAt(0).toUpperCase() + v.slice(1);
         } else if (key === 'travelDate' || key === 'returnDate') {
-          booking[key] = updates[key] ? new Date(updates[key]) : null;
+          booking[key] = parseDateInput(updates[key]);
         } else {
           booking[key] = updates[key];
         }
@@ -530,11 +584,20 @@ router.put('/:id', auth, async (req, res) => {
       
       for (const key of Object.keys(updates)) {
         if (key !== '_id' && key !== '__v' && key !== 'progressHistory') {
-          if (key === 'supplier' && updates[key]) {
-            const supplierDoc = await Supplier.findById(updates[key]);
-            if (supplierDoc) {
-              const oldSupplierName = booking.supplierName;
-              booking.supplier = updates[key];
+          if (key === 'supplier') {
+            const supplierId = (updates[key] || '').toString().trim();
+            const oldSupplierName = booking.supplierName;
+            if (!supplierId) {
+              booking.supplier = null;
+              booking.supplierName = '';
+              if (oldSupplierName === 'Agent2') booking.status = 'Ticked';
+              changes[key] = '';
+            } else {
+              const supplierDoc = await Supplier.findById(supplierId);
+              if (!supplierDoc) {
+                return res.status(400).json({ message: 'Invalid supplier' });
+              }
+              booking.supplier = supplierDoc._id;
               booking.supplierName = supplierDoc.name;
               if (supplierDoc.name === 'Agent2') {
                 booking.status = 'Unticketed';
@@ -554,7 +617,13 @@ router.put('/:id', auth, async (req, res) => {
               changes[key] = val;
             }
           } else if (key === 'travelDate' || key === 'returnDate') {
-            booking[key] = new Date(updates[key]);
+            booking[key] = parseDateInput(updates[key]);
+            changes[key] = updates[key];
+          } else if (key === 'multipleSectors') {
+            booking.multipleSectors = Array.isArray(updates[key]) ? updates[key].map(s => ({
+              ...s,
+              travelDate: parseDateInput(s?.travelDate)
+            })) : [];
             changes[key] = updates[key];
           } else if (key === 'paxName') {
             booking[key] = updates[key].toUpperCase();
@@ -707,9 +776,9 @@ router.post('/:id/date-change', auth, async (req, res) => {
     
     const dateChange = {
       oldTravelDate: booking.travelDate,
-      newTravelDate: changeTravelDate && newTravelDate ? new Date(newTravelDate) : booking.travelDate,
+      newTravelDate: changeTravelDate && newTravelDate ? parseDateInput(newTravelDate) : booking.travelDate,
       oldReturnDate: booking.returnDate,
-      newReturnDate: changeReturnDate && newReturnDate ? new Date(newReturnDate) : booking.returnDate,
+      newReturnDate: changeReturnDate && newReturnDate ? parseDateInput(newReturnDate) : booking.returnDate,
       oldOurCost: booking.ourCost,
       oldSalePrice: booking.salePrice,
       ourCostAddon: newOurCost != null ? parseFloat(newOurCost) || 0 : 0,
@@ -725,10 +794,14 @@ router.post('/:id/date-change', auth, async (req, res) => {
 
     // Date change charges are add-on only: add to existing ourCost/salePrice, do not replace
     if (changeTravelDate && newTravelDate) {
-      booking.travelDate = new Date(newTravelDate);
+      const parsed = parseDateInput(newTravelDate);
+      if (!parsed) return res.status(400).json({ message: 'Invalid new travel date' });
+      booking.travelDate = parsed;
     }
     if (changeReturnDate && newReturnDate) {
-      booking.returnDate = new Date(newReturnDate);
+      const parsed = parseDateInput(newReturnDate);
+      if (!parsed) return res.status(400).json({ message: 'Invalid new return date' });
+      booking.returnDate = parsed;
     }
     if (newOurCost !== undefined && newOurCost !== null) {
       booking.ourCost = (booking.ourCost || 0) + (parseFloat(newOurCost) || 0);
@@ -798,8 +871,16 @@ router.post('/:id/flight-change', auth, async (req, res) => {
       if (newDetails.airline !== undefined) booking.airline = newDetails.airline;
       if (newDetails.from !== undefined) booking.from = newDetails.from.charAt(0).toUpperCase() + newDetails.from.slice(1);
       if (newDetails.to !== undefined) booking.to = newDetails.to.charAt(0).toUpperCase() + newDetails.to.slice(1);
-      if (newDetails.travelDate !== undefined) booking.travelDate = new Date(newDetails.travelDate);
-      if (newDetails.returnDate !== undefined && booking.returnDate != null) booking.returnDate = new Date(newDetails.returnDate);
+      if (newDetails.travelDate !== undefined) {
+        const parsed = parseDateInput(newDetails.travelDate);
+        if (!parsed) return res.status(400).json({ message: 'Invalid travel date in flight change' });
+        booking.travelDate = parsed;
+      }
+      if (newDetails.returnDate !== undefined && booking.returnDate != null) {
+        const parsed = parseDateInput(newDetails.returnDate);
+        if (!parsed) return res.status(400).json({ message: 'Invalid return date in flight change' });
+        booking.returnDate = parsed;
+      }
     }
     if (Array.isArray(newPayments) && newPayments.length > 0) {
       const merged = normalizePayments(newPayments);
